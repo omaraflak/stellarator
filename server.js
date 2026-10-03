@@ -1,5 +1,5 @@
 /**
- * Stellarator static server (zero dependencies, Node ≥ 18).
+ * Stellarator local server (zero dependencies, Node ≥ 18): serves ./public.
  *
  *   node server.js            → http://localhost:8080
  *
@@ -12,7 +12,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = fileURLToPath(new URL('.', import.meta.url));
+const ROOT = fileURLToPath(new URL('./public/', import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
 
 const MIME = {
@@ -30,7 +30,7 @@ createServer(async (req, res) => {
   if (path.endsWith('/')) path += 'index.html';
   const file = normalize(join(ROOT, path));
   const type = MIME[extname(file)];
-  // Stay inside the project and skip dotfiles (.git, .claude, …).
+  // Stay inside public/ and skip dotfiles.
   if (!file.startsWith(ROOT) || file.includes(`${sep}.`) || !type) {
     res.writeHead(404, { 'content-type': 'text/plain' }).end('Not found');
     return;

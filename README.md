@@ -58,11 +58,11 @@ On symmetric levels you only design the base coils; their rotated and mirrored c
 
 Everything is computed in the browser, in plain JavaScript that mirrors SIMSOPT:
 
-- `js/physics/rzsurface.js`: `SurfaceRZFourier` evaluation and SIMSOPT's quadrature grids (`full torus`, `field period`, `half period`).
-- `js/physics/coilset.js`: `CurveXYZFourier`, `create_equally_spaced_curves`, `coils_via_symmetries`, and the Biot–Savart sources.
-- `js/physics/stage2.js`: the stage-2 objective and every penalty, with exact analytic gradients.
-- `js/physics/lbfgs.js`: L-BFGS with a strong-Wolfe line search (Relax).
-- `js/physics/tracer.js`: field-line tracing (RK4) for the Poincaré section and the rotational transform ι.
+- `public/js/physics/rzsurface.js`: `SurfaceRZFourier` evaluation and SIMSOPT's quadrature grids (`full torus`, `field period`, `half period`).
+- `public/js/physics/coilset.js`: `CurveXYZFourier`, `create_equally_spaced_curves`, `coils_via_symmetries`, and the Biot–Savart sources.
+- `public/js/physics/stage2.js`: the stage-2 objective and every penalty, with exact analytic gradients.
+- `public/js/physics/lbfgs.js`: L-BFGS with a strong-Wolfe line search (Relax).
+- `public/js/physics/tracer.js`: field-line tracing (RK4) for the Poincaré section and the rotational transform ι.
 
 Checks against SIMSOPT 1.11.1:
 
@@ -86,19 +86,29 @@ Exported designs can be imported back into the same level.
 
 ## Publish
 
-The game is a static site with no build step: `index.html`, `favicon.svg`, `css/` and `js/`. Any static host works, as long as it serves over http(s), because ES modules and Web Workers don't load from `file://`. `server.js` is only for local play.
+The game is a static site with no build step: everything served lives in `public/`. It must be served over http(s), because ES modules and Web Workers don't load from `file://`. `server.js` is only for local play.
 
-- **GitHub Pages**: push this folder to a repository, then Settings → Pages → Deploy from a branch → root.
-- **Netlify or Cloudflare Pages**: connect the repository (or drag the folder in) with no build command and the root as the publish directory.
+**Cloudflare Workers** (configured in `wrangler.jsonc` as an assets-only Worker named `stellarator`):
+
+```bash
+npx wrangler deploy
+```
+
+With Workers Builds (connected to this repository), leave the build command empty, keep the deploy command `npx wrangler deploy` and the path `/`. The Worker's name in the dashboard must match the `name` in `wrangler.jsonc`.
+
+Any other static host works too: point it at `public/` with no build command.
 
 Three.js loads from jsDelivr and the fonts from Google Fonts, so visitors need those reachable. Scores and progress stay in each visitor's browser.
 
 ## Layout
 
 ```
-js/physics   surface, coil set, stage-2 objective, L-BFGS, Biot–Savart, tracer, workers
-js/render    stage + bloom, plasma shader, coil tubes, field lines, sparks, ports
-js/game      levels, published targets, design + undo, scoring, export, best runs (local)
-js/ui        HUD, Poincaré panel
-server.js    tiny static file server
+public/                 everything that is deployed
+  index.html, favicon.svg, css/
+  js/physics            surface, coil set, stage-2 objective, L-BFGS, Biot–Savart, tracer, workers
+  js/render             stage + bloom, plasma shader, coil tubes, field lines, sparks, ports
+  js/game               levels, published targets, design + undo, scoring, export, best runs (local)
+  js/ui                 HUD, Poincaré panel
+server.js               local static server (npm start)
+wrangler.jsonc          Cloudflare Workers config (npx wrangler deploy)
 ```

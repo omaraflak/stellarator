@@ -5,7 +5,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "deploy": "npx wrangler deploy"
   },
   "engines": {
     "node": ">=18"

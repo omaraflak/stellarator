@@ -1,0 +1,10 @@
+// Cloudflare Workers: a static-assets-only Worker serving the game from ./public.
+// Deploy with `npx wrangler deploy` (no build step).
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "stellarator",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./public"
+  }
+}

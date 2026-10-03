@@ -8,6 +8,10 @@ Thumbs.db
 *.swp
 .claude/
 
+# Cloudflare Wrangler local state
+.wrangler/
+.dev.vars
+
 # Node (no dependencies today, but keep installs out)
 node_modules/
 npm-debug.log*
