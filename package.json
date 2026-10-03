@@ -6,6 +6,7 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
+    "build": "for f in public/js/*.js public/js/*/*.js; do node --check \"$f\" || exit 1; done && echo \"public/ is ready to deploy (no bundling needed)\"",
     "deploy": "npx wrangler deploy"
   },
   "engines": {

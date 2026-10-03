@@ -94,7 +94,7 @@ The game is a static site with no build step: everything served lives in `public
 npx wrangler deploy
 ```
 
-With Workers Builds (connected to this repository), leave the build command empty, keep the deploy command `npx wrangler deploy` and the path `/`. The Worker's name in the dashboard must match the `name` in `wrangler.jsonc`.
+With Workers Builds (connected to this repository), use the build command `npm run build` (a syntax check of the game files; there is no bundling), the deploy command `npx wrangler deploy` and the path `/`. The Worker's name in the dashboard must match the `name` in `wrangler.jsonc`.
 
 Any other static host works too: point it at `public/` with no build command.
 
