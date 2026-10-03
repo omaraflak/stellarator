@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stellarator</title>
+<meta name="description" content="Bend magnetic coils to trap a 100-million-degree plasma. A browser game whose final level is the real stellarator coil-design benchmark, scored exactly as the research code SIMSOPT scores it.">
+<meta name="theme-color" content="#03060c">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Stellarator: a coil-design game">
+<meta property="og:description" content="Bend magnetic coils to trap a 100-million-degree plasma. A browser game whose final level is the real stellarator coil-design benchmark, scored exactly as the research code SIMSOPT scores it.">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600&family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app">
+  <div id="stage" aria-label="3D view of the stellarator"></div>
+
+  <!-- Left column: level + tools -->
+  <div id="side">
+    <header id="levelbar" class="card">
+      <button id="btn-menu" class="level-chip" type="button" title="Choose a level (M)">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="chip-text">
+          <span id="level-code" class="chip-code">Training</span>
+          <span id="level-title" class="chip-title">Field Lines</span>
+        </span>
+        <span class="chip-caret" aria-hidden="true">▾</span>
+      </button>
+      <button id="goal" class="goal" type="button" title="Show the level briefing">Reach 72.6% for the first star</button>
+      <button id="btn-next" class="next-level" type="button" hidden>Next level →</button>
+    </header>
+    <nav id="toolbar" class="card" aria-label="Tools">
+      <button id="btn-undo" class="tool" type="button" title="Undo (Ctrl+Z)"><span class="ico" aria-hidden="true">↶</span><span class="lbl">Undo</span></button>
+      <button id="btn-redo" class="tool" type="button" title="Redo (Ctrl+Shift+Z)"><span class="ico" aria-hidden="true">↷</span><span class="lbl">Redo</span></button>
+      <button id="btn-smooth" class="tool" type="button" title="Smooth sharp bends (S)"><span class="ico" aria-hidden="true">∿</span><span class="lbl">Smooth</span></button>
+      <button id="btn-relax" class="tool" type="button" aria-pressed="false" title="Run a local optimiser on your design (R)" hidden><span class="ico" aria-hidden="true">✦</span><span class="lbl">Relax</span></button>
+      <button id="btn-link" class="tool" type="button" aria-pressed="false" title="Apply every edit to all coils (L)"><span class="ico" aria-hidden="true">⛓</span><span class="lbl">Link coils</span></button>
+      <button id="btn-reset" class="tool" type="button" title="Back to the starting coils"><span class="ico" aria-hidden="true">⟲</span><span class="lbl">Reset</span></button>
+      <span class="sep" aria-hidden="true"></span>
+      <button id="btn-board" class="tool" type="button" title="Your best runs (B)"><span class="ico" aria-hidden="true">☰</span><span class="lbl">Best runs</span></button>
+      <button id="btn-more" class="tool" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="more" title="View options and export"><span class="ico" aria-hidden="true">⋯</span><span class="lbl">More</span></button>
+      <div id="more" class="more card" hidden>
+        <label class="more-row" id="row-copies"><input type="checkbox" id="tg-copies"> Show all coils</label>
+        <label class="more-row"><input type="checkbox" id="tg-lines" checked> Field lines</label>
+        <label class="more-row"><input type="checkbox" id="tg-heat" checked> Leak heatmap</label>
+        <label class="more-row"><input type="checkbox" id="tg-sparks" checked> Sparks</label>
+        <button id="btn-export" class="more-row more-btn" type="button">Export JSON…</button>
+      </div>
+    </nav>
+  </div>
+
+  <!-- Confinement readout -->
+  <section id="readout" class="card" aria-label="Field error" aria-live="polite">
+    <div class="metric-label">Field error <span class="dim">⟨|B·n|⟩ / ⟨|B|⟩</span></div>
+    <div class="conf"><span id="tm-err">--</span></div>
+    <div class="conf-row">
+      <span id="tm-stars" class="stars" aria-label="Stars earned"></span>
+      <span id="tm-research" class="research-badge" hidden>✦ Beyond reference</span>
+    </div>
+    <div class="track" aria-hidden="true"><div id="track-fill" class="track-fill"></div><div id="track-ticks"></div></div>
+    <div class="score-row"><span>Score</span><b id="tm-score">0</b></div>
+    <button id="btn-details" class="details-toggle" type="button" aria-expanded="false" aria-controls="details">Engineering details</button>
+    <dl id="details" class="details" hidden></dl>
+  </section>
+
+  <!-- Poincaré section -->
+  <section id="poincare-card" class="card" aria-label="Poincaré section">
+    <div class="pc-head"><span class="eyebrow">Poincaré section · φ = 0</span></div>
+    <canvas id="poincare" width="220" height="200"></canvas>
+    <p id="poincare-status" class="pc-status">Tracing field lines…</p>
+  </section>
+
+  <div id="alerts" class="alerts" aria-live="polite"></div>
+
+  <div id="dock">
+    <div id="coilchip" class="coilchip card" hidden>
+      <span id="coilchip-name">Coil 2 current</span>
+      <button id="cur-down" type="button" class="chip-btn" aria-label="Lower the current">−</button>
+      <span id="coilchip-value" class="mono">100.0 kA</span>
+      <button id="cur-up" type="button" class="chip-btn" aria-label="Raise the current">+</button>
+    </div>
+    <p id="hint" class="hint"></p>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <!-- Title screen -->
+  <section id="title" class="title" hidden aria-labelledby="title-word">
+    <div class="title-main">
+      <div class="eyebrow title-eyebrow">A fusion coil-design game</div>
+      <h1 id="title-word" class="title-word"><span>Stellarator</span></h1>
+      <p class="title-tag">Bend magnetic coils until they hold a 100-million-degree plasma.</p>
+      <nav class="title-menu" aria-label="Main menu">
+        <button type="button" class="title-item" id="ti-play"><span class="ti-label" id="ti-play-label">Play</span><span class="ti-sub" id="ti-play-sub">Start with the training level</span></button>
+        <button type="button" class="title-item" id="ti-levels"><span class="ti-label">Levels</span><span class="ti-sub" id="ti-levels-sub">Five levels, from training to a real research problem</span></button>
+        <button type="button" class="title-item" id="ti-how"><span class="ti-label">How it works</span><span class="ti-sub">The physics in one minute</span></button>
+      </nav>
+    </div>
+    <footer class="title-foot">
+      <span>Progress is saved in this browser · <kbd>↑</kbd> <kbd>↓</kbd> <kbd>Enter</kbd></span>
+      <span id="title-caption" class="mono"></span>
+    </footer>
+  </section>
+
+  <!-- How it works -->
+  <div id="howto" class="overlay" hidden>
+    <div class="sheet sheet-how" role="dialog" aria-modal="true" aria-labelledby="how-title">
+      <div class="sheet-head">
+        <h2 id="how-title" class="sheet-title">How it works</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close">×</button>
+      </div>
+      <ol class="how-steps">
+        <li><span class="hs-n mono">01</span><h3>The plasma</h3><p>The glowing ring is a plasma at fusion temperature. No material can touch it, so a magnetic field holds it in place. The field only confines it where the field lines run along its surface; where they cross the surface, the plasma leaks. Those places glow orange.</p></li>
+        <li><span class="hs-n mono">02</span><h3>The coils</h3><p>All of the field comes from the coils around the plasma. Drag the points on a coil to change its shape, and the field is recalculated from the coil currents (the Biot–Savart law). On most levels you shape a few coils and symmetry copies them around the machine.</p></li>
+        <li><span class="hs-n mono">03</span><h3>The limits</h3><p>Coils must keep a minimum distance from each other and from the plasma, and must not bend too sharply. A segment that breaks a limit turns red. Stars only count when no limit is broken.</p></li>
+        <li><span class="hs-n mono">04</span><h3>The last level</h3><p>Precise QA uses a published plasma shape (Landreman &amp; Paul, 2022) with the coils, scoring and limits of the stage-2 example in SIMSOPT, an open-source stellarator design code. ★★★ means your coils match the published ones; ✦ means they do better. Designs can be exported in SIMSOPT's format.</p></li>
+      </ol>
+      <p class="sheet-text dim">The score is the field error ⟨|B·n|⟩ / ⟨|B|⟩: the average field crossing the plasma surface divided by the average field strength. Lower is better. From Level 2 on, Relax runs a numerical optimiser on your current design.</p>
+      <div class="sheet-actions">
+        <button type="button" class="btn-primary" id="how-play">Play</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Level briefing -->
+  <div id="briefing" class="overlay" hidden>
+    <div class="sheet sheet-narrow" role="dialog" aria-modal="true" aria-labelledby="brief-title">
+      <div id="brief-code" class="eyebrow">Level 01</div>
+      <h2 id="brief-title" class="brief-title">The Circle</h2>
+      <p id="brief-text" class="brief-text"></p>
+      <ul id="brief-stars" class="brief-stars"></ul>
+      <p id="brief-limits" class="sheet-text dim"></p>
+      <div class="how">
+        <span><b>Drag a glowing point</b> to bend a coil</span>
+        <span><b>Drag a selected coil</b> to move it</span>
+        <span><b>Shift</b> for fine moves</span>
+        <span><b>Relax</b> polishes your design (from Level 2)</span>
+      </div>
+      <div class="sheet-actions">
+        <button type="button" class="btn-primary" id="brief-go">Start</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Level menu -->
+  <div id="menu" class="overlay" hidden>
+    <div class="sheet sheet-menu" role="dialog" aria-modal="true" aria-labelledby="menu-title">
+      <header class="menu-head">
+        <div>
+          <div class="eyebrow">Stellarator</div>
+          <h2 id="menu-title" class="menu-title">Choose a level</h2>
+        </div>
+        <p id="menu-progress" class="menu-progress mono"></p>
+      </header>
+      <div id="level-cards" class="level-cards"></div>
+      <footer class="menu-foot">
+        <div class="menu-foot-actions">
+          <button id="menu-main" type="button" class="btn-ghost">Main menu</button>
+          <button id="menu-close" type="button" class="btn-ghost">Back to the reactor</button>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Level complete -->
+  <div id="complete" class="overlay" hidden>
+    <div class="sheet sheet-narrow complete" role="dialog" aria-modal="true" aria-labelledby="complete-title">
+      <div id="complete-code" class="eyebrow">Level 01 · The Circle</div>
+      <h2 id="complete-title" class="complete-title">Level complete</h2>
+      <div id="complete-stars" class="complete-stars" aria-hidden="true"></div>
+      <p id="complete-stats" class="complete-stats mono"></p>
+      <p id="complete-note" class="sheet-text dim"></p>
+      <div class="sheet-actions">
+        <button type="button" class="btn-ghost" id="complete-stay">Keep improving</button>
+        <button type="button" class="btn-primary" id="complete-next">Next level →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Best runs -->
+  <div id="board" class="overlay" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="board-title">
+      <div class="sheet-head">
+        <h2 id="board-title" class="sheet-title">Best runs</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close">×</button>
+      </div>
+      <div id="board-tabs" class="tabs" role="tablist"></div>
+      <p id="board-source" class="sheet-text dim"></p>
+      <div class="table-wrap">
+        <table class="board-table">
+          <thead><tr><th>#</th><th>Played</th><th class="num">Score</th><th class="num">Field error</th><th class="num">Coil length</th><th class="num">Coil gap</th><th>★</th></tr></thead>
+          <tbody id="board-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Export / import -->
+  <div id="export" class="overlay" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="export-title">
+      <div class="sheet-head">
+        <h2 id="export-title" class="sheet-title">Export design</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close">×</button>
+      </div>
+      <p class="sheet-text dim">Your coils exactly as SIMSOPT stores them: <span class="mono">CurveXYZFourier</span> coefficients and currents of the base coils, the symmetry, the target surface and the metrics. The included <span class="mono">simsopt_script</span> rebuilds the coils in SIMSOPT and recomputes the field error.</p>
+      <textarea id="export-text" class="code" readonly spellcheck="false" aria-label="Exported JSON"></textarea>
+      <div class="sheet-actions">
+        <span id="export-status" class="sheet-text dim" role="status"></span>
+        <button type="button" class="btn-ghost" id="export-copy">Copy JSON</button>
+        <button type="button" class="btn-primary" id="export-save">Save file</button>
+      </div>
+      <details class="import">
+        <summary>Import a design</summary>
+        <textarea id="import-text" class="code code-short" spellcheck="false" placeholder="Paste a design exported from this game, for this level" aria-label="Design JSON to import"></textarea>
+        <div class="sheet-actions">
+          <span id="import-status" class="sheet-text" role="status"></span>
+          <button type="button" class="btn-primary" id="import-go">Load design</button>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- Level-to-level transition -->
+  <div id="fade" class="fade" hidden aria-hidden="true">
+    <div id="fade-code" class="eyebrow"></div>
+    <div id="fade-title" class="fade-title"></div>
+  </div>
+
+  <div id="boot" class="boot">
+    <div class="boot-ring" aria-hidden="true"></div>
+    <div class="mono" id="boot-text">Winding coils…</div>
+  </div>
+</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

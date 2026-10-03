@@ -1,0 +1,24 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editors and local tooling
+.vscode/
+.idea/
+*.swp
+.claude/
+
+# Node (no dependencies today, but keep installs out)
+node_modules/
+npm-debug.log*
+
+# Python (for checking exports with SIMSOPT locally)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Exported designs and logs
+stellarator-design*.json
+*.log
+.env

@@ -1,0 +1,13 @@
+{
+  "name": "stellarator",
+  "version": "1.0.0",
+  "description": "Stellarator: a browser game about designing the magnet coils of a stellarator, ending on the real SIMSOPT stage-2 benchmark.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
