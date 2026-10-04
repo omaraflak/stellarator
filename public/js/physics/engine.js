@@ -17,8 +17,8 @@ const here = (p) => new URL(p, import.meta.url).href;
 
 // Worker entry points and the modules they need, dependencies first (for bundling).
 const FIELD = [here('./rzsurface.js'), here('./coilset.js'), here('../game/problem.js'), here('./biotsavart.js'), here('./stage2.js'), here('./fieldsolver.js'), here('./worker.js')];
-const RELAX = [here('./rzsurface.js'), here('./coilset.js'), here('../game/problem.js'), here('./stage2.js'), here('./lbfgs.js'), here('./relax.worker.js')];
-const TRACE = [here('./rzsurface.js'), here('./coilset.js'), here('./tracer.js'), here('./tracer.worker.js')];
+const RELAX = [here('./rzsurface.js'), here('./coilset.js'), here('../game/problem.js'), here('./stage2.js'), here('./lbfgs.js'), here('./relax.js'), here('./relax.worker.js')];
+const TRACE = [here('./rzsurface.js'), here('./coilset.js'), here('../game/problem.js'), here('./tracer.js'), here('./tracer.worker.js')];
 
 const bundles = new Map();
 
@@ -88,6 +88,7 @@ export class PhysicsEngine {
     this.minValidId = 0;
     this.backend = 'pending';
     this.onResult = () => {};
+    this.checks = new Map();
   }
 
   async init(level, display, tol) {
@@ -132,7 +133,18 @@ export class PhysicsEngine {
     }
   }
 
+  /** The record levels' fine check (FieldSolver.verify). Resolves { fieldError, maxRatio, ms }. */
+  verify(dofs, currents) {
+    const id = this.nextId++;
+    if (!this.worker) return Promise.resolve(this.local.verify({ id, dofs, currents }));
+    return new Promise((resolve) => {
+      this.checks.set(id, resolve);
+      this.worker.postMessage({ type: 'verify', id, dofs, currents });
+    });
+  }
+
   handle(msg) {
+    if (msg.type === 'verified') { this.checks.get(msg.id)?.(msg); this.checks.delete(msg.id); return; }
     if (msg.type !== 'result') return;
     this.inflight = false;
     if (this.queued) { const q = this.queued; this.queued = null; this.send(q); }
@@ -144,8 +156,11 @@ export class PhysicsEngine {
 export class Relaxer {
   constructor() { this.worker = null; this.running = false; }
 
-  /** Runs the optimiser; onProgress/onDone receive { dofs, currents, it, J, reason }. */
-  async start(level, dofs, currents, maxIter, onProgress, onDone) {
+  /**
+   * Runs the optimiser; onProgress/onDone receive { dofs, currents, it, J, reason, state }.
+   * `state` continues an earlier run's penalty schedule (record levels).
+   */
+  async start(level, dofs, currents, maxIter, state, onProgress, onDone) {
     this.stop();
     this.running = true;
     const { worker } = await spawn(RELAX);
@@ -157,7 +172,7 @@ export class Relaxer {
       else if (m.type === 'done') { this.running = false; this.worker = null; worker.terminate(); onDone(m); }
     };
     worker.onerror = (e) => { this.running = false; this.worker = null; onDone({ error: e.message || 'optimiser failed' }); };
-    worker.postMessage({ type: 'run', level, dofs, currents, maxIter });
+    worker.postMessage({ type: 'run', level, dofs, currents, maxIter, state });
   }
 
   stop() {

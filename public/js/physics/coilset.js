@@ -4,7 +4,7 @@
  *   base curves  CurveXYZFourier of order N:
  *     x(t) = xc0 + Σ_{m=1..N} xs_m sin(2πmt) + xc_m cos(2πmt),  t ∈ [0, 1)   (same for y, z)
  *     DOF order per curve: [xc0, xs1, xc1, …, xsN, xcN, yc0, …, zc0, …]  (3·(2N+1) values)
- *     sampled at nq = 15·N quadrature points t_q = q / nq
+ *     sampled at nq quadrature points t_q = q / nq (SIMSOPT's default nq = 15·N; spec.nq overrides)
  *   all coils    coils_via_symmetries(base, nfp, stellsym): for k in 0..nfp−1, for flip in
  *                [no, yes], for each base curve: γ ↦ F·R(2πk/nfp)·γ when flipped (else R·γ),
  *                and the current is negated on flipped coils.
@@ -89,14 +89,14 @@ export const applyM = (M, x, y, z, out, o) => {
 
 /**
  * A coil set: base DOFs + base currents, evaluated on demand.
- * spec = { nbase, order, nfp, stellsym }  (nfp/stellsym of the coil symmetry)
+ * spec = { nbase, order, nfp, stellsym, nq? }  (nfp/stellsym of the coil symmetry; nq quadrature points per coil)
  */
 export class CoilSet {
   constructor(spec, dofs, currents) {
     this.spec = spec;
     this.nbase = spec.nbase;
     this.order = spec.order;
-    this.nq = 15 * spec.order;
+    this.nq = spec.nq ?? 15 * spec.order;
     this.nd = dofsPerCurve(spec.order);
     this.basis = fourierBasis(spec.order, this.nq);
     this.ops = symmetryOps(spec.nbase, spec.nfp, spec.stellsym);

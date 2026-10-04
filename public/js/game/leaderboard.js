@@ -24,7 +24,7 @@ export const scoreboard = {
   record(entry) {
     const all = read();
     const i = all.findIndex((e) => e.run === entry.run);
-    if (i >= 0 && all[i].score >= entry.score) return false;
+    if (i >= 0 && all[i].score >= entry.score && !(entry.beat && !all[i].beat)) return false;
     if (i >= 0) all[i] = entry; else all.push(entry);
     all.sort(byScore);
     write(all.slice(0, KEEP));

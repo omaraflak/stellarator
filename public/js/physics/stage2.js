@@ -13,6 +13,13 @@
  *
  * plus, for the tutorial levels only: a per-coil length cap ½·max(L_i − L_max, 0)² (the
  * QuadraticPenalty pattern SIMSOPT uses for length limits) and a port keep-out penalty.
+ *
+ * The record levels use the formulation of Wechsung et al., PNAS 2022 instead:
+ *   Jf_local = ½ ∫ (B·n̂ / |B|)² ds                       SquaredFlux(definition="local")
+ *   a total-length budget ½·max(Σ L_i − L_budget, 0)², and an arclength regulariser
+ *   Var_q |γ'| per coil that keeps the parametrisation even (not part of any limit).
+ * Both flux definitions are always reported; problem.flux picks the one optimised.
+ *
  * `evaluate` returns J, every term, the headline metrics and (optionally) the exact
  * gradient with respect to the base-curve DOFs and base currents.
  */
@@ -52,24 +59,34 @@ export function evaluate(cs, problem, wantGrad = false) {
   const { nq, nbase, ncoils, G, G1, I, g1, g2, ops, basis } = cs;
   const NS = grid.count, pts = grid.positions, un = grid.unit, absn = grid.absn;
 
-  // ---------- squared flux ----------
+  // ---------- squared flux (quadratic and local definitions) ----------
   const B = new Float64Array(3 * NS);
   fieldOnGrid(cs, pts, NS, B);
-  let Jf = 0, sumBn = 0, sumB = 0, maxRatio = 0;
+  const local = problem.flux === 'local';
+  let Jq = 0, Jl = 0, sumBn = 0, sumB = 0, maxRatio = 0;
   const v = wantGrad ? new Float64Array(3 * NS) : null;
   for (let i = 0; i < NS; i++) {
     const t = 3 * i;
     const bn = B[t] * un[t] + B[t + 1] * un[t + 1] + B[t + 2] * un[t + 2];
     const bm = Math.hypot(B[t], B[t + 1], B[t + 2]);
-    Jf += bn * bn * absn[i];
+    const ratio = bn / bm;
+    Jq += bn * bn * absn[i];
+    Jl += ratio * ratio * absn[i];
     sumBn += Math.abs(bn); sumB += bm;
-    if (Math.abs(bn) / bm > maxRatio) maxRatio = Math.abs(bn) / bm;
-    if (v) {
+    if (Math.abs(ratio) > maxRatio) maxRatio = Math.abs(ratio);
+    if (!v) continue;
+    if (local) {
+      // d/dB of ½|n|(B·n̂)²/|B|² = |n|·(B·n̂/|B|²)·(n̂ − (B·n̂/|B|²)·B)
+      const q = bn / (bm * bm), s = (absn[i] * q) / NS;
+      v[t] = s * (un[t] - q * B[t]); v[t + 1] = s * (un[t + 1] - q * B[t + 1]); v[t + 2] = s * (un[t + 2] - q * B[t + 2]);
+    } else {
       const s = (bn * absn[i]) / NS;
       v[t] = s * un[t]; v[t + 1] = s * un[t + 1]; v[t + 2] = s * un[t + 2];
     }
   }
-  Jf = (0.5 * Jf) / NS;
+  Jq = (0.5 * Jq) / NS;
+  Jl = (0.5 * Jl) / NS;
+  const Jf = local ? Jl : Jq;
 
   // Gradients with respect to all-coil points/tangents and base second derivatives.
   const gG = wantGrad ? new Float64Array(3 * nq * ncoils) : null;
@@ -112,23 +129,27 @@ export function evaluate(cs, problem, wantGrad = false) {
     }
   }
 
-  // ---------- coil-coil distance (all pairs for the metric, SIMSOPT pairs for J) ----------
-  const dcc = problem.ccMin;
-  let Jcc = 0, ccMin = Infinity, ccPair = [0, 0];
+  // ---------- coil-coil distance ----------
+  // SIMSOPT's pairs: every coil against each base curve before it (j < min(i, nbase)).
+  // Under the coil symmetry any pair of coils maps onto one of these pairs, so the
+  // minimum over these pairs is the minimum over all pairs.
+  const dcc = problem.ccMin, dcc2 = dcc * dcc;
+  let Jcc = 0, cc2 = Infinity, ccPair = [0, 0];
   for (let i = 0; i < ncoils; i++) {
-    for (let j = 0; j < i; j++) {
-      const counted = j < Math.min(i, nbase);
+    for (let j = 0; j < Math.min(i, nbase); j++) {
       const bi = 3 * nq * i, bj = 3 * nq * j;
       for (let q = 0; q < nq; q++) {
         const a = bi + 3 * q;
         const xi = G[a], yi = G[a + 1], zi = G[a + 2];
-        const li = Math.hypot(G1[a], G1[a + 1], G1[a + 2]);
+        let li = -1;
         for (let r = 0; r < nq; r++) {
           const b = bj + 3 * r;
           const dx = xi - G[b], dy = yi - G[b + 1], dz = zi - G[b + 2];
-          const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          if (d < ccMin) { ccMin = d; ccPair = [i, j]; }
-          if (!counted || d >= dcc) continue;
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 < cc2) { cc2 = d2; ccPair = [i, j]; }
+          if (d2 >= dcc2) continue;
+          if (li < 0) li = Math.hypot(G1[a], G1[a + 1], G1[a + 2]);
+          const d = Math.sqrt(d2);
           const lj = Math.hypot(G1[b], G1[b + 1], G1[b + 2]);
           const e = dcc - d, n2 = nq * nq;
           Jcc += (li * lj * e * e) / n2;
@@ -144,22 +165,25 @@ export function evaluate(cs, problem, wantGrad = false) {
       }
     }
   }
+  const ccMin = Math.sqrt(cc2);
 
   // ---------- coil-surface distance ----------
-  const dcs = problem.csMin;
-  let Jcs = 0, csMin = Infinity, csCoil = 0;
+  const dcs = problem.csMin, dcs2 = dcs * dcs;
+  let Jcs = 0, cs2 = Infinity, csCoil = 0;
   for (let c = 0; c < ncoils; c++) {
     const base = 3 * nq * c;
     for (let q = 0; q < nq; q++) {
       const a = base + 3 * q;
       const x = G[a], y = G[a + 1], z = G[a + 2];
-      const lc = Math.hypot(G1[a], G1[a + 1], G1[a + 2]);
+      let lc = -1;
       for (let s = 0; s < NS; s++) {
         const t3 = 3 * s;
         const dx = x - pts[t3], dy = y - pts[t3 + 1], dz = z - pts[t3 + 2];
-        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (d < csMin) { csMin = d; csCoil = c; }
-        if (d >= dcs) continue;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < cs2) { cs2 = d2; csCoil = c; }
+        if (d2 >= dcs2) continue;
+        if (lc < 0) lc = Math.hypot(G1[a], G1[a + 1], G1[a + 2]);
+        const d = Math.sqrt(d2);
         const e = dcs - d, n2 = nq * NS;
         Jcs += (lc * absn[s] * e * e) / n2;
         if (!wantGrad) continue;
@@ -170,6 +194,7 @@ export function evaluate(cs, problem, wantGrad = false) {
       }
     }
   }
+  const csMin = Math.sqrt(cs2);
 
   // ---------- port keep-out (tutorial level only) ----------
   let Jport = 0;
@@ -196,13 +221,15 @@ export function evaluate(cs, problem, wantGrad = false) {
     if (Jport > before) portsBlocked.push(pi);
   }
 
-  // ---------- per-base-curve terms: length, curvature, mean squared curvature ----------
-  const lengths = new Float64Array(nbase), kappaMax = new Float64Array(nbase), msc = new Float64Array(nbase), Jcurv = new Float64Array(nbase);
+  // ---------- per-base-curve terms: length, curvature, mean squared curvature, arclength ----------
+  const lengths = new Float64Array(nbase), kappaMax = new Float64Array(nbase), msc = new Float64Array(nbase);
+  const Jcurv = new Float64Array(nbase), Jal = new Float64Array(nbase);
   const k0 = problem.kappaMax, mscMax = problem.mscMax, Lmax = problem.lengthMax ?? Infinity;
-  let Jmsc = 0, Jlmax = 0;
+  const per = [];
+  let Jmsc = 0, Jlmax = 0, totalLength = 0;
   for (let b = 0; b < nbase; b++) {
     const off = 3 * nq * b;
-    let L = 0, A = 0, Jk = 0, kmax = 0;
+    let L = 0, A = 0, Jk = 0, kmax = 0, L2 = 0;
     const kap = new Float64Array(nq), la = new Float64Array(nq);
     for (let q = 0; q < nq; q++) {
       const o = off + 3 * q;
@@ -211,59 +238,67 @@ export function evaluate(cs, problem, wantGrad = false) {
       const an = Math.hypot(ax, ay, az), cn = Math.hypot(cx, cy, cz);
       const k = cn / (an * an * an);
       kap[q] = k; la[q] = an;
-      L += an; A += k * k * an;
+      L += an; L2 += an * an; A += k * k * an;
       const e = Math.max(k - k0, 0);
       Jk += 0.5 * e * e * an;
       if (k > kmax) kmax = k;
     }
-    L /= nq; A /= nq; Jk /= nq;
+    L /= nq; L2 /= nq; A /= nq; Jk /= nq;
     const M = A / L;
-    lengths[b] = L; msc[b] = M; Jcurv[b] = Jk; kappaMax[b] = kmax;
-    const excess = Math.max(M - mscMax, 0);
+    lengths[b] = L; msc[b] = M; Jcurv[b] = Jk; kappaMax[b] = kmax; Jal[b] = L2 - L * L;
+    totalLength += L;
+    const excess = Math.max(M - mscMax, 0), over = Math.max(L - Lmax, 0);
     Jmsc += 0.5 * excess * excess;
-    const over = Math.max(L - Lmax, 0);
     Jlmax += 0.5 * over * over;
-    if (!wantGrad) continue;
-    for (let q = 0; q < nq; q++) {
-      const o = off + 3 * q;
-      const ax = g1[o], ay = g1[o + 1], az = g1[o + 2], bx = g2[o], by = g2[o + 1], bz = g2[o + 2];
-      const cx = ay * bz - az * by, cy = az * bx - ax * bz, cz = ax * by - ay * bx;
-      const an = la[q], cn = Math.hypot(cx, cy, cz), k = kap[q];
-      // dκ/da = (b×c)/(|c||a|³) − 3κ a/|a|² ;  dκ/db = (c×a)/(|c||a|³)
-      let dka = [0, 0, 0], dkb = [0, 0, 0];
-      if (cn > 1e-300) {
-        const s = 1 / (cn * an * an * an);
-        dka = [(by * cz - bz * cy) * s - (3 * k * ax) / (an * an), (bz * cx - bx * cz) * s - (3 * k * ay) / (an * an), (bx * cy - by * cx) * s - (3 * k * az) / (an * an)];
-        dkb = [(cy * az - cz * ay) * s, (cz * ax - cx * az) * s, (cx * ay - cy * ax) * s];
-      }
-      const ua = [ax / an, ay / an, az / an];
-      const e = Math.max(k - k0, 0);
-      for (let d = 0; d < 3; d++) {
-        // length (linear weight, plus the optional cap)
-        let ga = ((W.length + (W.lengthMax ?? 0) * over) * ua[d]) / nq;
-        // curvature Lp (p = 2)
-        ga += (W.curvature * (e * an * dka[d] + 0.5 * e * e * ua[d])) / nq;
-        let gb = (W.curvature * e * an * dkb[d]) / nq;
-        // mean squared curvature: MSC = A/L
-        if (excess > 0) {
-          const dA_da = (2 * k * an * dka[d] + k * k * ua[d]) / nq, dL_da = ua[d] / nq;
-          const dA_db = (2 * k * an * dkb[d]) / nq;
-          ga += W.msc * excess * (dA_da / L - (A * dL_da) / (L * L));
-          gb += W.msc * excess * (dA_db / L);
+    per.push({ kap, la, L, A, excess, over });
+  }
+  const overTotal = Math.max(totalLength - (problem.totalLengthMax ?? Infinity), 0);
+  const Jltot = 0.5 * overTotal * overTotal;
+
+  if (wantGrad) {
+    const wTot = (W.lengthTotal ?? 0) * overTotal, wAl = W.arclength ?? 0;
+    for (let b = 0; b < nbase; b++) {
+      const off = 3 * nq * b, { kap, la, L, A, excess, over } = per[b];
+      for (let q = 0; q < nq; q++) {
+        const o = off + 3 * q;
+        const ax = g1[o], ay = g1[o + 1], az = g1[o + 2], bx = g2[o], by = g2[o + 1], bz = g2[o + 2];
+        const cx = ay * bz - az * by, cy = az * bx - ax * bz, cz = ax * by - ay * bx;
+        const an = la[q], cn = Math.hypot(cx, cy, cz), k = kap[q];
+        // dκ/da = (b×c)/(|c||a|³) − 3κ a/|a|² ;  dκ/db = (c×a)/(|c||a|³)
+        let dka = [0, 0, 0], dkb = [0, 0, 0];
+        if (cn > 1e-300) {
+          const s = 1 / (cn * an * an * an);
+          dka = [(by * cz - bz * cy) * s - (3 * k * ax) / (an * an), (bz * cx - bx * cz) * s - (3 * k * ay) / (an * an), (bx * cy - by * cx) * s - (3 * k * az) / (an * an)];
+          dkb = [(cy * az - cz * ay) * s, (cz * ax - cx * az) * s, (cx * ay - cy * ax) * s];
         }
-        gT1base[o + d] += ga;
-        gB2[o + d] += gb;
+        const ua = [ax / an, ay / an, az / an];
+        const e = Math.max(k - k0, 0);
+        for (let d = 0; d < 3; d++) {
+          // length (linear weight, per-coil cap, total budget) and arclength variance
+          let ga = ((W.length + (W.lengthMax ?? 0) * over + wTot + 2 * wAl * (an - L)) * ua[d]) / nq;
+          // curvature Lp (p = 2)
+          ga += (W.curvature * (e * an * dka[d] + 0.5 * e * e * ua[d])) / nq;
+          let gb = (W.curvature * e * an * dkb[d]) / nq;
+          // mean squared curvature: MSC = A/L
+          if (excess > 0) {
+            const dA_da = (2 * k * an * dka[d] + k * k * ua[d]) / nq, dL_da = ua[d] / nq;
+            const dA_db = (2 * k * an * dkb[d]) / nq;
+            ga += W.msc * excess * (dA_da / L - (A * dL_da) / (L * L));
+            gb += W.msc * excess * (dA_db / L);
+          }
+          gT1base[o + d] += ga;
+          gB2[o + d] += gb;
+        }
       }
     }
   }
 
-  let totalLength = 0;
-  for (const L of lengths) totalLength += L;
-  const J = Jf + W.length * totalLength + W.cc * Jcc + W.cs * Jcs + W.curvature * Jcurv.reduce((a, b) => a + b, 0) + W.msc * Jmsc
-    + (W.port ?? 0) * Jport + (W.lengthMax ?? 0) * Jlmax;
+  const sum = (a) => a.reduce((x, y) => x + y, 0);
+  const J = Jf + W.length * totalLength + W.cc * Jcc + W.cs * Jcs + W.curvature * sum(Jcurv) + W.msc * Jmsc
+    + (W.port ?? 0) * Jport + (W.lengthMax ?? 0) * Jlmax + (W.lengthTotal ?? 0) * Jltot + (W.arclength ?? 0) * sum(Jal);
 
   const metrics = {
-    J, Jf, Jcc, Jcs, Jport, Jlmax, Jcurv: Array.from(Jcurv),
+    J, Jf, JfQuad: Jq, JfLocal: Jl, Jcc, Jcs, Jport, Jlmax, Jltot, Jcurv: Array.from(Jcurv), Jal: Array.from(Jal),
     BdotN_mean: sumBn / NS, B_mean: sumB / NS, fieldError: sumBn / sumB, maxRatio,
     lengths: Array.from(lengths), totalLength, kappaMax: Array.from(kappaMax), msc: Array.from(msc),
     ccMin, csMin, ccPair, csCoil, portsBlocked,

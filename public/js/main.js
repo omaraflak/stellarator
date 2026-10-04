@@ -8,7 +8,7 @@
  *   drag / tool / Relax → Design (DOFs) → CoilSet (base curves + symmetric copies)
  *     → tubes and handles redrawn on the main thread
  *     → field worker: heatmap on the plasma, exact stage-2 metrics, limit alerts
- *     → judge (stars, research tier) → HUD
+ *     → judge (stars; on record levels, the ✦ check) → HUD
  *     → (once the design settles) tracer worker: field lines + Poincaré section
  *
  * Interaction is direct manipulation: hover a coil to show its handles, drag a handle to
@@ -24,10 +24,11 @@ import { Sparks } from './render/sparks.js';
 import { PortView } from './render/ports.js';
 import { makeSurface, quadGrid, displayMesh } from './physics/rzsurface.js';
 import { CoilSet } from './physics/coilset.js';
+import { coilSpec } from './game/problem.js';
 import { PhysicsEngine, Relaxer, Tracer } from './physics/engine.js';
-import { LEVELS, levelById, LIMIT_TOLERANCE } from './game/levels.js';
+import { LEVELS, levelById, levelCode, levelName, LIMIT_TOLERANCE } from './game/levels.js';
 import { Design, HANDLES } from './game/design.js';
-import { judge, pct } from './game/scoring.js';
+import { judge, passesFineCheck, pct, RECORD_MARGIN } from './game/scoring.js';
 import { buildExport, parseImport } from './game/export.js';
 import { scoreboard } from './game/leaderboard.js';
 import { SHOWCASE_QA } from './game/showcase.js';
@@ -49,7 +50,13 @@ const save = (k, v) => {
 
 /* ------------------------------------------------------------------ setup */
 const hud = new Hud();
-const stage = createStage(document.getElementById('stage'));
+let stage;
+try {
+  stage = createStage(document.getElementById('stage'));
+} catch (err) {
+  showFatal('This game needs WebGL, and the browser could not start it. Close and reopen the tab (or the browser), and check that hardware acceleration is turned on.', err);
+  throw err;
+}
 const { scene, camera, controls, renderer } = stage;
 const canvas = renderer.domElement;
 const engine = new PhysicsEngine();
@@ -63,8 +70,9 @@ const DISPLAY = { nphi: 128, ntheta: 40 };
 const NR = 160;
 /** Field-line tracing for the Poincaré section. */
 const TRACE = { lines: 8, transits: 40 };
-/** Iterations per press of Relax (it can be stopped at any time). */
+/** Iterations per press of Relax (it can be stopped at any time); record levels run longer. */
 const RELAX_ITERS = 400;
+const RELAX_ITERS_RECORD = 2000;
 /** Largest displacement a single drag can make (m) and the Shift slow-down factor. */
 const MAX_DRAG = 0.5;
 const FINE = 0.2;
@@ -77,7 +85,8 @@ const S = {
   views: null,
   sel: -1, hover: { coil: -1, point: -1 },
   linked: false, showAll: false, portDims: [],
-  dragging: false, dragId: 0, relaxing: false,
+  dragging: false, dragId: 0, relaxing: false, relaxState: null,
+  check: null, lastBeat: false, // record levels: the ✦ check of the current design
   attract: false, // title screen: a showcase design in the background, nothing saved or scored
   toggles: { lines: true, heat: true, sparks: true },
   tutorial: new Set(),
@@ -109,6 +118,9 @@ async function loadLevel(level, opts = {}) {
     tracer.cancel();
     clearTimeout(S.traceTimer);
     S.relaxing = false;
+    S.relaxState = null;
+    S.check = null;
+    S.lastBeat = false;
     S.sel = -1;
     S.hover = { coil: -1, point: -1 };
     S.linked = false;
@@ -125,7 +137,7 @@ async function loadLevel(level, opts = {}) {
       S.design.currents.set(saved.currents);
     }
     const c = level.coils;
-    S.cs = new CoilSet({ nbase: c.nbase, order: c.order, nfp: c.nfp, stellsym: c.stellsym }, S.design.dofs, S.design.currents);
+    S.cs = new CoilSet(coilSpec(level), S.design.dofs, S.design.currents);
     S.K = S.cs.ncoils;
     S.nbase = c.nbase;
     S.render = { pts: new Float64Array(3 * S.K * NR), kappa: new Float64Array(S.K * NR) };
@@ -263,6 +275,7 @@ engine.onResult = (r) => {
     if (changed) S.views.coils.updateFlags(c, S.render.kappa, S.level.limits.kappaMax, S.alert);
   }
   S.verdict = judge(S.level, S.metrics, baseOf);
+  if (S.check?.passed && S.check.key === designKey()) S.verdict.beat = true;
   hud.setMetrics(S.level, S.metrics, S.verdict, statusInfo(), alertsFor(S.verdict));
   S.views.ports?.update(S.metrics.portsBlocked, S.portDims);
   if (!r.fast && !S.dragging && !S.relaxing) onFullResult();
@@ -272,6 +285,7 @@ function statusInfo() {
   return {
     backend: engine.backend, ms: S.result?.ms, mode: S.result?.mode, fps: S.fps,
     currents: S.level?.coils.freeCurrents ? Array.from(S.design.currents) : null,
+    checking: !!(S.check && !S.check.done),
   };
 }
 
@@ -288,38 +302,78 @@ function alertsFor(v) {
       case 'kappa': return `Coil ${label(a)} bends too sharply (${f2(b.value)} /m, limit ${b.limit}). Try Smooth.`;
       case 'msc': return `Coil ${label(a)} is too wiggly overall (mean-square curvature ${f2(b.value)}, limit ${b.limit}). Try Smooth.`;
       case 'length': return `Coil ${label(a)} is too long (${f2(b.value)} m, limit ${b.limit} m).`;
+      case 'budget': return `All coils together are too long (${f2(b.value)} m, budget ${b.limit} m).`;
       case 'port': return `${S.level.ports[b.port].name} is blocked by a coil.`;
       default: return 'An engineering limit is broken.';
     }
   });
 }
 
-/** After an exact solve of a settled design: stars, saved runs, progress, tracing. */
+/** After an exact solve of a settled design: stars, saved runs, progress, tracing, record check. */
 function onFullResult() {
   if (S.attract) { scheduleTrace(); return; }
   const v = S.verdict, m = S.metrics;
-  const earned = S.lastStars >= 0 && (v.stars > S.lastStars || (v.research && !S.lastResearch));
+  const earned = S.lastStars >= 0 && v.stars > S.lastStars;
   S.lastStars = v.stars;
-  S.lastResearch = v.research;
   if (v.stars >= 1) markTutorial('goal');
-  if (v.valid) {
-    scoreboard.record({
-      run: S.runId, level: S.level.id, score: v.score, stars: v.stars, research: v.research,
-      fieldError: m.fieldError, length: m.totalLength, ccMin: m.ccMin, csMin: m.csMin,
-      dofs: Array.from(S.design.dofs), currents: Array.from(S.design.currents), savedAt: new Date().toISOString(),
-    });
-    const progress = load(STORE.progress, {});
-    const p = progress[S.level.id] ?? { stars: 0, research: false, best: null };
-    if (v.stars > p.stars || (v.research && !p.research) || p.best == null || m.fieldError < p.best) {
-      progress[S.level.id] = { stars: Math.max(p.stars, v.stars), research: p.research || v.research, best: Math.min(p.best ?? Infinity, m.fieldError) };
-      save(STORE.progress, progress);
-    }
-  }
+  if (v.valid) saveRun(v, m);
   save(STORE.design(S.levelKey), { dofs: Array.from(S.design.dofs), currents: Array.from(S.design.currents) });
   hud.setHistory(S.design.undoStack.length > 0, S.design.redoStack.length > 0);
   updateNextButton();
+  if (v.candidate) startRecordCheck();
+  else S.check = null;
   scheduleTrace();
   if (earned) showComplete();
+}
+
+function saveRun(v, m) {
+  scoreboard.record({
+    run: S.runId, level: S.level.id, score: v.score, stars: v.stars, beat: v.beat,
+    fieldError: m.fieldError, length: m.totalLength, ccMin: m.ccMin, csMin: m.csMin,
+    dofs: Array.from(S.design.dofs), currents: Array.from(S.design.currents), savedAt: new Date().toISOString(),
+  });
+  const progress = load(STORE.progress, {});
+  const p = progress[S.level.id] ?? { stars: 0, beat: false, best: null };
+  if (v.stars > p.stars || (v.beat && !p.beat) || p.best == null || m.fieldError < p.best) {
+    progress[S.level.id] = { stars: Math.max(p.stars, v.stars), beat: p.beat || v.beat, best: Math.min(p.best ?? Infinity, m.fieldError) };
+    save(STORE.progress, progress);
+  }
+}
+
+/* ------------------------------------------------------------------ record check */
+// On a record level, a design that beats the published record on the scoring grid is only
+// a candidate. It earns ✦ after two more checks of that exact design: the fine check
+// (a 256 × 64 full-torus grid and 4 × the coil quadrature, in the field worker) and
+// field-line tracing with every traced line staying inside the plasma.
+const designKey = () => `${S.level.id}|${S.design.dofs.join(',')}|${S.design.currents.join(',')}`;
+
+function startRecordCheck() {
+  const key = designKey();
+  if (S.check?.key === key) return;
+  S.check = { key, fine: null, lost: null, done: false, passed: false };
+  engine.verify(Float64Array.from(S.design.dofs), Float64Array.from(S.design.currents)).then((fine) => {
+    if (S.check?.key !== key) return;
+    S.check.fine = fine;
+    finishRecordCheck();
+  });
+}
+
+function finishRecordCheck() {
+  const c = S.check;
+  if (!c || c.done || !c.fine || c.lost == null) return;
+  c.done = true;
+  const rec = S.level.record;
+  if (!passesFineCheck(S.level, c.fine)) {
+    hud.toast(`Close: on the fine check this design gives ${pct(c.fine.fieldError)}, the record ${pct(rec.fine.fieldError)}. Not a new record yet.`, '', 5000);
+  } else if (c.lost > 0) {
+    hud.toast(`${c.lost} traced field line${c.lost > 1 ? 's leave' : ' leaves'} the plasma, so this design can't count as a record.`, '', 5000);
+  } else {
+    c.passed = true;
+    S.verdict.beat = true;
+    saveRun(S.verdict, S.metrics);
+    if (!S.lastBeat) { S.lastBeat = true; showComplete(); }
+  }
+  hud.setMetrics(S.level, S.metrics, S.verdict, statusInfo(), alertsFor(S.verdict));
 }
 
 /* ------------------------------------------------------------------ tracing */
@@ -335,21 +389,25 @@ function scheduleTrace() {
   S.traceTimer = setTimeout(() => {
     if (!S.views || S.dragging || S.relaxing) return;
     S.traceLines = [];
+    const key = S.level.record ? designKey() : null;
     tracer.trace(S.level, Float64Array.from(S.design.dofs), Float64Array.from(S.design.currents), TRACE, {
       start: (m) => poincare.start(m, TRACE.lines),
       line: (m) => { poincare.add(m); S.traceLines[m.index] = { pts: m.pts3d, lost: m.lostAt >= 0 }; },
-      done: () => { S.views?.lines.setLines(S.traceLines.filter(Boolean)); poincare.done(); },
+      done: () => {
+        S.views?.lines.setLines(S.traceLines.filter(Boolean));
+        poincare.done();
+        if (key && S.check?.key === key) { S.check.lost = S.traceLines.filter((l) => l?.lost).length; finishRecordCheck(); }
+      },
     }).catch((err) => console.warn('[trace]', err));
   }, 450);
 }
 
 /* ------------------------------------------------------------------ level flow */
 function nextLevelAfter(level) {
+  if (level.kind === 'record') return null; // the four budgets are side by side, not a sequence
   const i = LEVELS.findIndex((l) => l.id === level.id);
   return LEVELS[i + 1] ?? null;
 }
-
-const levelName = (level) => (level.real ? `Research · ${level.title}` : level.code === 'T' ? `Training · ${level.title}` : `Level ${level.code} · ${level.title}`);
 
 function updateNextButton() {
   const btn = document.getElementById('btn-next');
@@ -360,18 +418,20 @@ function updateNextButton() {
 }
 
 function showComplete() {
-  const v = S.verdict, m = S.metrics, level = S.level;
+  const v = S.verdict, m = S.metrics, level = S.level, rec = level.record;
   const next = nextLevelAfter(level);
   document.getElementById('complete-code').textContent = levelName(level);
-  document.getElementById('complete-title').textContent = v.research ? 'Beyond the published design'
-    : v.stars === 3 ? (level.real ? 'Published design matched' : 'Level mastered') : v.stars === 2 ? 'Two stars' : 'Level complete';
+  document.getElementById('complete-title').textContent = v.beat ? 'New record'
+    : v.stars === 3 ? (rec ? 'Record matched' : 'Level mastered') : v.stars === 2 ? 'Two stars' : 'Level complete';
   document.getElementById('complete-stars').innerHTML = [0, 1, 2].map((i) => `<span class="${i < v.stars ? 'on' : ''}">★</span>`).join('')
-    + (level.research ? `<span class="research${v.research ? ' on' : ''}">✦</span>` : '');
+    + (rec ? `<span class="research${v.beat ? ' on' : ''}">✦</span>` : '');
   document.getElementById('complete-stats').textContent = `field error ${pct(m.fieldError)} · ${m.totalLength.toFixed(2)} m of coil · score ${v.score.toLocaleString('en-US')}`;
   let note;
-  if (v.research) note = 'Your coils beat the published SIMSOPT design within the same limits, with no more coil. Export the JSON (More menu) and check it in SIMSOPT. ';
-  else if (v.stars < 3) note = `Reach ${pct(level.stars[v.stars])} for the next star, or move on. `;
-  else if (level.research) note = `You matched the published design. The research tier needs ${pct(level.research.fieldError)} with at most ${level.research.maxLength.toFixed(2)} m of coil. `;
+  if (v.beat) {
+    note = `Your coils beat the best published design for this budget (${rec.cite}: ${pct(rec.fieldError)}) under the same rules, and passed the fine-grid and field-line checks. ` +
+      'Export the JSON from the More menu to check it in SIMSOPT. ';
+  } else if (v.stars < 3) note = `Reach ${pct(level.stars[v.stars])} for the next star, or move on. `;
+  else if (rec) note = `Within 2 % of the published record. ✦ needs at most ${pct((1 - RECORD_MARGIN) * rec.fieldError)}, confirmed by the fine checks. `;
   else note = '';
   document.getElementById('complete-note').textContent = `${note}Saved to your best runs.`;
   const go = document.getElementById('complete-next');
@@ -401,8 +461,7 @@ async function transition(code, title, work) {
 
 async function goToLevel(level) {
   if (S.loading) return;
-  const code = level.real ? 'Research' : level.code === 'T' ? 'Training' : `Level ${level.code}`;
-  await transition(code, level.title, async () => {
+  await transition(levelCode(level), level.title, async () => {
     leaveTitle();
     await loadLevel(level);
   });
@@ -430,23 +489,23 @@ function fillTitle() {
   const last = levelFrom(load(STORE.last, null));
   document.getElementById('ti-play-label').textContent = last ? 'Continue' : 'Play';
   document.getElementById('ti-play-sub').textContent = last ? levelName(last) : 'Start with the training level';
-  const { stars, max, research } = progressSummary();
-  document.getElementById('ti-levels-sub').textContent = stars || research
-    ? `★ ${stars} / ${max} earned${research ? ` · ✦ ${research}` : ''}`
-    : 'Five levels, from training to a real research problem';
+  const { stars, max, beat } = progressSummary();
+  document.getElementById('ti-levels-sub').textContent = stars || beat
+    ? `★ ${stars} / ${max} earned${beat ? ` · ✦ ${beat}` : ''}`
+    : 'From training to the published research records';
   document.getElementById('title-caption').textContent = `Behind the menu: a ★★★ coil set for the Precise QA plasma · field error ${pct(SHOWCASE_QA.fieldError)}`;
 }
 
 function progressSummary() {
   const progress = load(STORE.progress, {});
-  let stars = 0, max = 0, research = 0;
+  let stars = 0, max = 0, beat = 0;
   for (const l of LEVELS) {
     if (!l.stars) continue;
     max += 3;
     stars += Math.min(3, progress[l.id]?.stars ?? 0);
-    if (progress[l.id]?.research) research++;
+    if (progress[l.id]?.beat) beat++;
   }
-  return { stars, max, research };
+  return { stars, max, beat, records: LEVELS.filter((l) => l.record).length };
 }
 
 function setTitleActive(i) {
@@ -557,7 +616,7 @@ function markTutorial(step) {
   updateHint();
 }
 
-/** Current control for the selected coil (research level: currents are free, coil 1 is the fixed reference). */
+/** Current control for the selected coil (Level 04 and the records: currents are free, coil 1 is the fixed reference). */
 function updateCoilChip() {
   const chip = document.getElementById('coilchip');
   const show = !!S.level?.coils.freeCurrents && S.sel >= 0;
@@ -789,6 +848,7 @@ function reset() {
   if (!S.views) return;
   stopRelax();
   S.design.reset();
+  S.relaxState = null;
   onDesignChanged(allBases(), false);
   hud.setHistory(true, false);
   hud.toast('Back to the starting coils. Undo restores your design.', '', 2600);
@@ -812,7 +872,8 @@ function toggleRelax() {
   hud.setRelaxing(true, true);
   markTraceStale();
   updateHint();
-  relaxer.start(S.level, Float64Array.from(S.design.dofs), Float64Array.from(S.design.currents), RELAX_ITERS,
+  const iters = S.level.continuation ? RELAX_ITERS_RECORD : RELAX_ITERS;
+  relaxer.start(S.level, Float64Array.from(S.design.dofs), Float64Array.from(S.design.currents), iters, S.relaxState,
     (m) => {
       if (!S.relaxing) return;
       S.design.dofs.set(m.dofs);
@@ -825,6 +886,7 @@ function toggleRelax() {
     (m) => {
       if (!S.relaxing) return;
       if (m.dofs) { S.design.dofs.set(m.dofs); S.design.currents.set(m.currents); }
+      if (m.state) S.relaxState = m.state;
       finishRelax(m.error ? `Relax failed: ${m.error}` : `Relax finished after ${m.it} iterations`);
     },
   ).catch((err) => finishRelax(`Relax could not start: ${err.message ?? err}`));
@@ -945,25 +1007,50 @@ function openMenu() {
   const progress = load(STORE.progress, {});
   const wrap = document.getElementById('level-cards');
   wrap.innerHTML = '';
-  for (const level of LEVELS) {
-    const p = progress[level.id] ?? { stars: 0, research: false };
+  const starRow = (p, withRecord) => [0, 1, 2].map((i) => `<span class="${i < (p?.stars ?? 0) ? 'on' : ''}">★</span>`).join('')
+    + (withRecord ? `<span class="${p?.beat ? 'on' : ''}">✦</span>` : '');
+  const current = (level) => !S.attract && S.level?.id === level.id;
+  for (const level of LEVELS.filter((l) => !l.record)) {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = `level-card${!S.attract && S.level?.id === level.id ? ' is-current' : ''}${level.real ? ' is-real' : ''}`;
-    const stars = [0, 1, 2].map((i) => `<span class="${i < p.stars ? 'on' : ''}">★</span>`).join('') + (level.research ? `<span class="${p.research ? 'on' : ''}">✦</span>` : '');
+    b.className = `level-card${current(level) ? ' is-current' : ''}`;
     const c = level.coils, K = c.nbase * c.nfp * (c.stellsym ? 2 : 1);
     b.innerHTML = `
-      <span class="lc-code">${level.real ? 'RESEARCH · REAL PROBLEM' : level.code === 'T' ? 'TRAINING' : 'LEVEL ' + level.code}</span>
+      <span class="lc-code">${levelCode(level).toUpperCase()}</span>
       <span class="lc-title"></span>
       <span class="lc-text"></span>
-      <span class="lc-meta"><span>${K} coils${c.nbase < K ? ` · ${c.nbase} to design` : ''}${level.ports.length ? ' · ports' : ''}</span><span class="lc-stars">${stars}</span></span>`;
+      <span class="lc-meta"><span>${K} coils${c.nbase < K ? ` · ${c.nbase} to design` : ''}${level.ports.length ? ' · ports' : ''}</span><span class="lc-stars">${starRow(progress[level.id], false)}</span></span>`;
     b.querySelector('.lc-title').textContent = level.title;
     b.querySelector('.lc-text').textContent = level.brief.split('. ')[0] + '.';
     b.addEventListener('click', () => goToLevel(level).catch(reportError));
     wrap.appendChild(b);
   }
-  const { stars, max, research } = progressSummary();
-  document.getElementById('menu-progress').textContent = `★ ${stars} / ${max} · ✦ ${research} / ${LEVELS.filter((l) => l.research).length}`;
+  // The record levels: one card, one button per coil-length budget.
+  const records = LEVELS.filter((l) => l.record);
+  if (records.length) {
+    const card = document.createElement('div');
+    card.className = 'record-card';
+    card.innerHTML = `
+      <div class="rc-intro">
+        <span class="lc-code">RESEARCH RECORDS</span>
+        <span class="lc-title">Precise QA, as published</span>
+        <span class="lc-text">The coil setup of ${records[0].record.cite}, the best published coils for this plasma. Pick a total coil length; more coil buys accuracy. ★★★ is within 2 % of the record, ✦ beats it.</span>
+      </div>`;
+    for (const level of records) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `level-card rc-budget${current(level) ? ' is-current' : ''}`;
+      b.innerHTML = `
+        <span class="lc-code">≤ ${level.record.budget} m OF COIL</span>
+        <span class="rc-record mono">record ${pct(level.record.fieldError)}</span>
+        <span class="lc-meta"><span>${progress[level.id]?.best ? `best ${pct(progress[level.id].best)}` : 'not played'}</span><span class="lc-stars">${starRow(progress[level.id], true)}</span></span>`;
+      b.addEventListener('click', () => goToLevel(level).catch(reportError));
+      card.appendChild(b);
+    }
+    wrap.appendChild(card);
+  }
+  const { stars, max, beat, records: nrec } = progressSummary();
+  document.getElementById('menu-progress').textContent = `★ ${stars} / ${max} · ✦ ${beat} / ${nrec}`;
   // From the title, "Back" returns to it; in a level, the menu can also lead back to the title.
   document.getElementById('menu-close').textContent = S.attract ? 'Back' : 'Back to the reactor';
   document.getElementById('menu-close').hidden = !S.views;
@@ -1039,7 +1126,7 @@ function openBoard(levelId) {
     t.className = 'tab';
     t.setAttribute('role', 'tab');
     t.setAttribute('aria-selected', String(l.id === levelId));
-    t.textContent = l.real ? `Research · ${l.title}` : l.code === 'T' ? 'Training' : `${l.code} · ${l.title}`;
+    t.textContent = l.record ? `Record · ${l.record.budget} m` : l.code === 'T' ? 'Training' : `${l.code} · ${l.title}`;
     t.addEventListener('click', () => openBoard(l.id));
     tabs.appendChild(t);
   }
@@ -1058,7 +1145,7 @@ function openBoard(levelId) {
     if (current) tr.className = 'mine';
     const cells = [
       String(i + 1), current ? 'This run' : when(e.savedAt), Number(e.score).toLocaleString('en-US'), pct(e.fieldError),
-      `${Number(e.length).toFixed(2)} m`, `${Number(e.ccMin).toFixed(3)} m`, ('★'.repeat(Number(e.stars) || 0) || '–') + (e.research ? ' ✦' : ''),
+      `${Number(e.length).toFixed(2)} m`, `${Number(e.ccMin).toFixed(3)} m`, ('★'.repeat(Number(e.stars) || 0) || '–') + (e.beat ? ' ✦' : ''),
     ];
     cells.forEach((c, ci) => {
       const td = document.createElement('td');
@@ -1093,13 +1180,18 @@ function frame(now) {
 
 /* ------------------------------------------------------------------ boot */
 function reportError(err) {
-  console.error(err);
   const where = String(err?.stack ?? '').split('\n').find((l) => l.includes('.js')) ?? '';
+  showFatal(`Could not start the reactor: ${err?.message || err}. ${where.trim()} Reload the page to try again.`, err);
+}
+
+/** Replaces the loading screen with an error message. */
+function showFatal(message, err) {
+  console.error(err);
   const boot = document.getElementById('boot') ?? document.body.appendChild(Object.assign(document.createElement('div'), { id: 'boot', className: 'boot' }));
   boot.classList.remove('gone');
   boot.classList.add('failed');
   boot.innerHTML = '<div class="boot-ring" aria-hidden="true"></div><div class="mono" id="boot-text"></div>';
-  boot.querySelector('#boot-text').textContent = `Could not start the reactor: ${err?.message || err}. ${where.trim()} Reload the page to try again.`;
+  boot.querySelector('#boot-text').textContent = message;
 }
 
 function levelFrom(desc) {

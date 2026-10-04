@@ -37,8 +37,36 @@ export const LANDREMAN_PAUL_QA = {
 /** Results of the unmodified SIMSOPT reference run (see header). */
 export const REFERENCE_QA = {
   fieldErrorRound1: 1.39052e-3,  // ⟨|B·n|⟩/⟨|B|⟩ after the first round (length weight 1e-6)
-  fieldError: 4.40940e-4,        // after the second round (length weight 1e-7): the published design
+  fieldError: 4.40940e-4,        // after the second round (length weight 1e-7): the reference run's design
   maxRatio: 1.7503e-3,           // max |B·n|/|B|
   totalLength: 19.468675,        // m, sum of the 4 base coils
   ccMin: 0.100116, csMin: 0.300668, kappaMax: 5.0034, mscMax: 4.5906,
+};
+
+/**
+ * PNAS_QA_RECORDS: the best published coil sets for the Landreman–Paul QA plasma, from
+ *   F. Wechsung, M. Landreman, A. Giuliani, A. Cerfon & G. Stadler, "Precise stellarator
+ *   quasi-symmetry can be achieved with electromagnetic coils", PNAS 119, e2202084119 (2022).
+ * Formulation: 4 base CurveXYZFourier coils of order 16 (160 quadrature points), nfp = 2 with
+ * stellarator symmetry, first current fixed; minimise SquaredFlux(definition="local") on a
+ * 32 × 32 half-period grid (half-cell shift) subject to Σ L ≤ budget, κ ≤ 5 /m, MSC ≤ 5 /m²,
+ * coil–coil distance ≥ 0.1 m, each met to 0.1 %. No coil–plasma distance limit.
+ * Coils: github.com/florianwechsung/CoilsForPreciseQS (archive.zip, minimizers/
+ * output_well_False_lengthbound_{L}_kap_5.0_msc_5.0_dist_0.1_fil_0_ig_{k}_order_16_expquad).
+ * Gil et al., Phys. Rev. E 114, 025202 (2026) re-evaluated these sets and did not beat them
+ * at equal length.
+ *
+ * Every number below was recomputed with SIMSOPT 1.11.1 from those files (and matches this
+ * game's own physics to ~1e-12). `fine` is the verification check: a 256 × 64 full-torus
+ * grid with 4 × the coil quadrature points (640 per coil).
+ */
+export const PNAS_QA_RECORDS = {
+  18: { fieldError: 9.11229e-4, maxRatio: 3.25600e-3, JfLocal: 4.76054e-6, fine: { fieldError: 9.125911e-4, maxRatio: 3.368888e-3 },
+    totalLength: 18.00973, ccMin: 0.13287, csMin: 0.27130, kappaMax: 4.4669, msc: 4.9783 },
+  20: { fieldError: 3.21832e-4, maxRatio: 1.24204e-3, JfLocal: 6.23489e-7, fine: { fieldError: 3.215181e-4, maxRatio: 1.247379e-3 },
+    totalLength: 20.01197, ccMin: 0.11311, csMin: 0.28677, kappaMax: 5.0003, msc: 5.0000 },
+  22: { fieldError: 1.11131e-4, maxRatio: 4.21493e-4, JfLocal: 7.70366e-8, fine: { fieldError: 1.111655e-4, maxRatio: 4.335154e-4 },
+    totalLength: 22.01336, ccMin: 0.10000, csMin: 0.30241, kappaMax: 5.0003, msc: 5.0000 },
+  24: { fieldError: 4.34990e-5, maxRatio: 1.59168e-4, JfLocal: 1.16557e-8, fine: { fieldError: 4.351049e-5, maxRatio: 1.623375e-4 },
+    totalLength: 24.00471, ccMin: 0.10000, csMin: 0.30709, kappaMax: 5.0001, msc: 5.0000 },
 };

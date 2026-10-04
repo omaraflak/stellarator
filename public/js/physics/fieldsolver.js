@@ -10,6 +10,9 @@
  * Interactive speed-up: during a drag only the coils generated from the moving base
  * curves change, so the display field of every other coil is cached once per drag
  * ("background") and only the moving coils are re-evaluated. This is exact.
+ *
+ * verify() is the record levels' fine check: the field error and worst point on a
+ * 256 × 64 full-torus grid, with 4 × the coil quadrature points.
  */
 import { buildProblem } from '../game/problem.js';
 import { CoilSet } from './coilset.js';
@@ -21,6 +24,8 @@ export class FieldSolver {
   /** level: plain level object; display: { nphi, ntheta }; tol: limit tolerance for alerts. */
   init(level, display, tol) {
     const { surface, spec, problem } = buildProblem(level);
+    this.surface = surface;
+    this.fineGrid = null;
     this.level = level;
     this.spec = spec;
     this.problem = problem;
@@ -68,5 +73,24 @@ export class FieldSolver {
     const { metrics } = evaluate(cs, this.problem);
     const alerts = alertFlags(cs, this.problem, this.tol);
     return { id: req.id, fast: !!fast, mode, bn, metrics, alerts, ms: performance.now() - t0 };
+  }
+
+  verify({ id, dofs, currents }) {
+    const t0 = performance.now();
+    this.fineGrid ??= quadGrid(this.surface, 'full torus', 256, 64);
+    const g = this.fineGrid, V = g.count;
+    const cs = new CoilSet({ ...this.spec, nq: 4 * (this.spec.nq ?? 15 * this.spec.order) }, dofs, currents);
+    const { recs, count } = cs.sources();
+    const B = new Float64Array(3 * V);
+    fieldAt(recs, count, g.positions, B);
+    let sumBn = 0, sumB = 0, maxRatio = 0;
+    for (let i = 0; i < V; i++) {
+      const t = 3 * i;
+      const bn = Math.abs(B[t] * g.unit[t] + B[t + 1] * g.unit[t + 1] + B[t + 2] * g.unit[t + 2]);
+      const bm = Math.hypot(B[t], B[t + 1], B[t + 2]);
+      sumBn += bn; sumB += bm;
+      if (bn / bm > maxRatio) maxRatio = bn / bm;
+    }
+    return { id, fieldError: sumBn / sumB, maxRatio, ms: performance.now() - t0 };
   }
 }

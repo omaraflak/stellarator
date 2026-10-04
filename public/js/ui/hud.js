@@ -4,11 +4,13 @@
  * plain-language alerts, a one-line hint and the tools. Engineering numbers live behind
  * "Engineering details".
  */
-import { pct } from '../game/scoring.js';
+import { pct, RECORD_MARGIN } from '../game/scoring.js';
+import { levelCode } from '../game/levels.js';
 
 const $ = (id) => document.getElementById(id);
 
-const levelLabel = (level) => (level.real ? 'Research' : level.code === 'T' ? 'Training' : `Level ${level.code}`);
+/** The ✦ threshold of a record level (beat the record by RECORD_MARGIN). */
+const recordTarget = (level) => (1 - RECORD_MARGIN) * level.record.fieldError;
 
 export class Hud {
   constructor() {
@@ -24,15 +26,15 @@ export class Hud {
 
   setLevel(level) {
     this.level = level;
-    this.el.code.textContent = levelLabel(level);
+    this.el.code.textContent = levelCode(level);
     this.el.title.textContent = level.title;
     // Progress track: log scale from 30 % error (left) to just beyond the hardest target (right).
-    const hardest = level.research?.fieldError ?? level.stars?.[2] ?? 1e-3;
+    const hardest = level.record ? recordTarget(level) : level.stars?.[2] ?? 1e-3;
     this.lo = Math.log10(0.3);
     this.hi = Math.log10(hardest / 1.6);
     this.el.trackTicks.innerHTML = '';
-    const ticks = [...(level.stars ?? []).map((t) => ({ t, cls: 'tick' }))];
-    if (level.research) ticks.push({ t: level.research.fieldError, cls: 'tick research' });
+    const ticks = (level.stars ?? []).map((t) => ({ t, cls: 'tick' }));
+    if (level.record) ticks.push({ t: recordTarget(level), cls: 'tick research' });
     for (const { t, cls } of ticks) {
       const d = document.createElement('div');
       d.className = cls;
@@ -51,13 +53,15 @@ export class Hud {
   }
 
   fillBriefing(level) {
-    $('brief-code').textContent = levelLabel(level);
+    $('brief-code').textContent = levelCode(level);
     $('brief-title').textContent = level.title;
     $('brief-text').textContent = level.brief;
     const list = $('brief-stars');
     list.innerHTML = '';
     const rows = (level.stars ?? []).map((t, i) => [`${'★'.repeat(i + 1)}`, `field error ≤ ${pct(t)}`]);
-    if (level.research) rows.push(['✦', `field error ≤ ${pct(level.research.fieldError)} with ≤ ${level.research.maxLength.toFixed(2)} m of coil`]);
+    if (level.record) {
+      rows.push(['✦', `beat the record (${pct(level.record.fieldError)}, ${level.record.cite}) by ${RECORD_MARGIN * 100} %, confirmed by a finer check and field-line tracing`]);
+    }
     for (const [s, text] of rows) {
       const li = document.createElement('li');
       li.innerHTML = `<span class="st">${s}</span><span>${text}</span>`;
@@ -65,14 +69,18 @@ export class Hud {
     }
     list.hidden = !rows.length;
     const L = level.limits;
-    const parts = [`coils ≥ ${L.ccMin} m apart`, `≥ ${L.csMin} m from the plasma`, `curvature ≤ ${L.kappaMax} /m`];
+    const parts = [`coils ≥ ${L.ccMin} m apart`];
+    if (L.csMin) parts.push(`≥ ${L.csMin} m from the plasma`);
+    parts.push(`curvature ≤ ${L.kappaMax} /m`);
     if (L.mscMax != null) parts.push(`mean-square curvature ≤ ${L.mscMax} /m²`);
     if (L.lengthMax != null) parts.push(`each coil ≤ ${L.lengthMax} m long`);
+    if (L.totalLengthMax != null) parts.push(`all coils together ≤ ${L.totalLengthMax} m`);
     if (level.ports.length) parts.push(`${level.ports.length} ports kept clear`);
-    $('brief-limits').textContent = `Stars need a buildable design: ${parts.join(' · ')}.`;
+    const tol = L.tol != null ? ` Limits must hold to ${L.tol * 100} %.` : '';
+    $('brief-limits').textContent = `Stars need a buildable design: ${parts.join(' · ')}.${tol}`;
   }
 
-  /** m: stage-2 metrics; v: judge() verdict; extra: { backend, ms, mode, fps, currents }; alerts: strings. */
+  /** m: stage-2 metrics; v: judge() verdict; extra: { backend, ms, mode, fps, currents, checking }; alerts: strings. */
   setMetrics(level, m, v, extra, alerts) {
     const e = this.el;
     e.err.textContent = pct(m.fieldError);
@@ -81,25 +89,26 @@ export class Hud {
       e.stars.innerHTML = level.stars.map((_, i) => `<span class="${i < v.stars ? 'on' : ''}">★</span>`).join('');
       e.stars.setAttribute('aria-label', `${v.stars} of 3 stars`);
       [...e.trackTicks.children].forEach((t, i) => {
-        const thr = i < level.stars.length ? level.stars[i] : level.research?.fieldError;
+        const thr = i < level.stars.length ? level.stars[i] : recordTarget(level);
         t.classList.toggle('met', v.valid && m.fieldError <= thr);
       });
     }
-    e.research.hidden = !v.research;
+    e.research.hidden = !v.beat;
     e.trackFill.style.width = `${this.pos(m.fieldError) * 100}%`;
     e.score.textContent = v.valid ? v.score.toLocaleString('en-US') : '–';
-    this.setGoal(level, m, v);
+    this.setGoal(level, m, v, extra);
     this.setAlerts(alerts);
     this.lastDetails = [level, m, extra];
     if (!e.details.hidden) this.fillDetails(level, m, extra);
   }
 
-  setGoal(level, m, v) {
+  setGoal(level, m, v, extra) {
     let html;
     if (!v.valid) html = 'Fix the red warnings to earn stars.';
+    else if (v.beat) html = '<b>✦ New record.</b> Export it and check it in SIMSOPT.';
+    else if (extra.checking) html = 'Possible new record: <b>checking</b> on a finer grid and tracing field lines…';
     else if (v.stars < 3) html = `Reach <b>${pct(level.stars[v.stars])}</b> field error for ${'★'.repeat(v.stars + 1)}`;
-    else if (level.research && !v.research) html = `Research tier: beat <b>${pct(level.research.fieldError)}</b> with ≤ ${level.research.maxLength.toFixed(2)} m of coil`;
-    else if (v.research) html = '<b>✦ Beyond the published design.</b> Export it for SIMSOPT.';
+    else if (level.record) html = `Record: <b>${pct(level.record.fieldError)}</b> (${level.record.cite}). Beat it by ${RECORD_MARGIN * 100} % for ✦`;
     else html = '<b>★★★</b> Every star earned.';
     if (this.el.goal.innerHTML !== html) this.el.goal.innerHTML = html;
   }
@@ -126,20 +135,24 @@ export class Hud {
   }
 
   fillDetails(level, m, extra) {
-    const L = level.limits;
+    const L = level.limits, rec = level.record, tol = L.tol ?? 0.005;
     const f = (v, d = 3) => v.toFixed(d);
     const kmax = Math.max(...m.kappaMax), mmax = Math.max(...m.msc);
     const rows = [
-      ['Field error ⟨|B·n|⟩/⟨|B|⟩', pct(m.fieldError), false],
-      ['Worst |B·n|/|B|', pct(m.maxRatio), false],
-      ['Squared flux J_f', `${m.Jf.toExponential(3)} T²m²`, false],
-      ['Mean |B|', `${f(m.B_mean)} T`, false],
-      ['Closest coils', `${f(m.ccMin)} m (≥ ${L.ccMin})`, m.ccMin < L.ccMin * 0.995],
-      ['Coil–plasma gap', `${f(m.csMin)} m (≥ ${L.csMin})`, m.csMin < L.csMin * 0.995],
-      ['Max curvature', `${f(kmax, 2)} /m (≤ ${L.kappaMax})`, kmax > L.kappaMax * 1.005],
+      ['Field error ⟨|B·n|⟩/⟨|B|⟩', `${pct(m.fieldError)}${rec ? ` (record ${pct(rec.fieldError)})` : ''}`, false],
+      ['Worst |B·n|/|B|', `${pct(m.maxRatio)}${rec ? ` (record ${pct(rec.maxRatio)})` : ''}`, false],
     ];
-    if (L.mscMax != null) rows.push(['Max mean-square curvature', `${f(mmax, 2)} /m² (≤ ${L.mscMax})`, mmax > L.mscMax * 1.005]);
-    rows.push(['Total coil length', `${f(m.totalLength, 2)} m${level.reference ? ` (ref. ${level.reference.totalLength.toFixed(2)})` : ''}`, false]);
+    if (rec) rows.push(['Local squared flux (objective)', `${m.JfLocal.toExponential(3)} (record ${rec.JfLocal.toExponential(3)})`, false]);
+    else rows.push(['Squared flux J_f', `${m.Jf.toExponential(3)} T²m²`, false]);
+    rows.push(
+      ['Mean |B|', `${f(m.B_mean)} T`, false],
+      ['Closest coils', `${f(m.ccMin)} m (≥ ${L.ccMin})`, m.ccMin < L.ccMin * (1 - tol)],
+      L.csMin ? ['Coil–plasma gap', `${f(m.csMin)} m (≥ ${L.csMin})`, m.csMin < L.csMin * (1 - tol)] : ['Coil–plasma gap', `${f(m.csMin)} m (no limit)`, false],
+      ['Max curvature', `${f(kmax, 2)} /m (≤ ${L.kappaMax})`, kmax > L.kappaMax * (1 + tol)],
+    );
+    if (L.mscMax != null) rows.push(['Max mean-square curvature', `${f(mmax, 2)} /m² (≤ ${L.mscMax})`, mmax > L.mscMax * (1 + tol)]);
+    if (L.totalLengthMax != null) rows.push(['Total coil length', `${f(m.totalLength, 3)} m (budget ${L.totalLengthMax})`, m.totalLength > L.totalLengthMax * (1 + tol)]);
+    else rows.push(['Total coil length', `${f(m.totalLength, 2)} m${level.reference ? ` (SIMSOPT run ${level.reference.totalLength.toFixed(2)})` : ''}`, false]);
     if (extra.currents) rows.push(['Coil currents', extra.currents.map((I) => (I / 1000).toFixed(1)).join(', ') + ' kA', false]);
     const solver = [
       extra.backend?.startsWith('worker') ? 'web worker' : 'main thread',

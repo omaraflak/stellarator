@@ -2,7 +2,7 @@
  * The title screen's background: a ★★★ coil set for the Precise QA level.
  *
  * Produced in-game by one press of Relax (400 L-BFGS iterations on SIMSOPT's stage-two
- * objective) from SIMSOPT's starting circles. Field error 4.3965e-4 (published design:
+ * objective) from SIMSOPT's starting circles. Field error 4.3965e-4 (SIMSOPT's reference run:
  * 4.4094e-4), every limit met within LIMIT_TOLERANCE, 19.49 m of coil. Recomputed in
  * SIMSOPT 1.11.1 from the game's export: all metrics agree to 10 significant digits.
  */

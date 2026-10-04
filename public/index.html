@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Stellarator</title>
-<meta name="description" content="Bend magnetic coils to trap a 100-million-degree plasma. A browser game whose final level is the real stellarator coil-design benchmark, scored exactly as the research code SIMSOPT scores it.">
+<meta name="description" content="Bend magnetic coils to trap a 100-million-degree plasma. A browser game that ends on the published research records for stellarator coil design, scored exactly as the research code SIMSOPT scores them.">
 <meta name="theme-color" content="#03060c">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Stellarator: a coil-design game">
-<meta property="og:description" content="Bend magnetic coils to trap a 100-million-degree plasma. A browser game whose final level is the real stellarator coil-design benchmark, scored exactly as the research code SIMSOPT scores it.">
+<meta property="og:description" content="Bend magnetic coils to trap a 100-million-degree plasma. A browser game that ends on the published research records for stellarator coil design, scored exactly as the research code SIMSOPT scores them.">
 <meta name="twitter:card" content="summary">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -68,7 +68,7 @@
     <div class="conf"><span id="tm-err">--</span></div>
     <div class="conf-row">
       <span id="tm-stars" class="stars" aria-label="Stars earned"></span>
-      <span id="tm-research" class="research-badge" hidden>✦ Beyond reference</span>
+      <span id="tm-research" class="research-badge" hidden>✦ New record</span>
     </div>
     <div class="track" aria-hidden="true"><div id="track-fill" class="track-fill"></div><div id="track-ticks"></div></div>
     <div class="score-row"><span>Score</span><b id="tm-score">0</b></div>
@@ -126,7 +126,7 @@
         <li><span class="hs-n mono">01</span><h3>The plasma</h3><p>The glowing ring is a plasma at fusion temperature. No material can touch it, so a magnetic field holds it in place. The field only confines it where the field lines run along its surface; where they cross the surface, the plasma leaks. Those places glow orange.</p></li>
         <li><span class="hs-n mono">02</span><h3>The coils</h3><p>All of the field comes from the coils around the plasma. Drag the points on a coil to change its shape, and the field is recalculated from the coil currents (the Biot–Savart law). On most levels you shape a few coils and symmetry copies them around the machine.</p></li>
         <li><span class="hs-n mono">03</span><h3>The limits</h3><p>Coils must keep a minimum distance from each other and from the plasma, and must not bend too sharply. A segment that breaks a limit turns red. Stars only count when no limit is broken.</p></li>
-        <li><span class="hs-n mono">04</span><h3>The last level</h3><p>Precise QA uses a published plasma shape (Landreman &amp; Paul, 2022) with the coils, scoring and limits of the stage-2 example in SIMSOPT, an open-source stellarator design code. ★★★ means your coils match the published ones; ✦ means they do better. Designs can be exported in SIMSOPT's format.</p></li>
+        <li><span class="hs-n mono">04</span><h3>The research records</h3><p>Level 04 uses a published plasma shape (Landreman &amp; Paul, 2022) with the setup of the stage-2 example in SIMSOPT, an open-source stellarator design code. The record levels use the exact setup of Wechsung et al. (PNAS 2022), whose coils are the best published for this plasma. ★★★ means within 2 % of their design; ✦ means better, confirmed by a finer check. Designs export in SIMSOPT's format.</p></li>
       </ol>
       <p class="sheet-text dim">The score is the field error ⟨|B·n|⟩ / ⟨|B|⟩: the average field crossing the plasma surface divided by the average field strength. Lower is better. From Level 2 on, Relax runs a numerical optimiser on your current design.</p>
       <div class="sheet-actions">

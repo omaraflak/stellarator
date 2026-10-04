@@ -6,6 +6,7 @@
  */
 import { makeSurface, quadGrid, crossSection } from './rzsurface.js';
 import { CoilSet } from './coilset.js';
+import { coilSpec } from '../game/problem.js';
 import { traceLine, startPoints, plasmaBounds } from './tracer.js';
 
 self.onmessage = (e) => {
@@ -15,7 +16,7 @@ self.onmessage = (e) => {
   const { level } = msg;
   const surface = makeSurface(level.surface);
   const c = level.coils;
-  const cs = new CoilSet({ nbase: c.nbase, order: c.order, nfp: c.nfp, stellsym: c.stellsym }, msg.dofs, msg.currents);
+  const cs = new CoilSet(coilSpec(level), msg.dofs, msg.currents);
   const { recs, count } = cs.sources();
   const boundary = crossSection(surface, 0, 256);
   const bounds = plasmaBounds(quadGrid(surface, 'full torus', 64, 32));

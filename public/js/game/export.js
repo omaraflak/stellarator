@@ -27,13 +27,17 @@ export function buildExport({ level, design, metrics, verdict }) {
     format: 'stellarator-game/simsopt-stage2@1',
     exported_at: new Date().toISOString(),
     level: { id: level.id, name: `${level.name}: ${level.title}` },
-    target: level.real
-      ? { source: 'SIMSOPT tests/test_files/input.LandremanPaul2021_QA (Landreman & Paul, PRL 128, 035001, 2022)', vacuum: true }
-      : { source: 'tutorial rotating ellipse', vacuum: true },
+    target: { source: level.plasmaSource ?? 'tutorial rotating ellipse', vacuum: true },
+    objective: level.flux === 'local'
+      ? 'SquaredFlux(definition="local") = ½∫(B·n/|B|)² ds, as in Wechsung et al., PNAS 2022'
+      : 'SquaredFlux (quadratic flux) plus weighted penalties, as in SIMSOPT\'s stage_two_optimization.py',
+    record: level.record
+      ? { source: level.record.source, budget_m: level.record.budget, field_error: level.record.fieldError, field_error_fine_check: level.record.fine.fieldError }
+      : undefined,
     surface: { nfp: S.nfp, mpol: S.mpol, ntor: S.ntor, stellsym: true, rc: S.rc, zs: S.zs, layout: 'rc[m][n + ntor], zs[m][n + ntor]' },
     scoring_grid: { ...level.scoring },
     coils: {
-      type: 'CurveXYZFourier', order: c.order, numquadpoints: 15 * c.order,
+      type: 'CurveXYZFourier', order: c.order, numquadpoints: c.quadpoints ?? 15 * c.order,
       nfp: c.nfp, stellsym: c.stellsym,
       dof_order: dofNames(c.order),
       base_curves: base,
@@ -42,14 +46,15 @@ export function buildExport({ level, design, metrics, verdict }) {
     limits: { ...level.limits },
     metrics: {
       field_error: metrics.fieldError, max_BdotN_over_B: metrics.maxRatio, squared_flux_Jf: metrics.Jf,
-      mean_B_tesla: metrics.B_mean, coil_coil_min: metrics.ccMin, coil_surface_min: metrics.csMin,
+      squared_flux_local: metrics.JfLocal, mean_B_tesla: metrics.B_mean, coil_coil_min: metrics.ccMin, coil_surface_min: metrics.csMin,
       kappa_max: metrics.kappaMax, msc: metrics.msc, lengths: metrics.lengths, total_length: metrics.totalLength,
     },
-    verdict: { valid: verdict.valid, stars: verdict.stars, research: verdict.research },
+    verdict: { valid: verdict.valid, stars: verdict.stars, new_record: verdict.beat },
     simsopt_script: [
       'import json, numpy as np',
       'from simsopt.geo import CurveXYZFourier, SurfaceRZFourier',
       'from simsopt.field import Current, coils_via_symmetries, BiotSavart',
+      'from simsopt.objectives import SquaredFlux',
       "d = json.load(open('stellarator-design.json'))",
       "c, S, g = d['coils'], d['surface'], d['scoring_grid']",
       'curves = []',
@@ -68,6 +73,7 @@ export function buildExport({ level, design, metrics, verdict }) {
       'B = bs.B().reshape(s.gamma().shape)',
       'Bn = np.abs(np.sum(B * s.unitnormal(), axis=2))',
       "print('field error <|B.n|>/<|B|> =', Bn.mean() / np.linalg.norm(B, axis=2).mean())",
+      "print('local squared flux =', SquaredFlux(s, bs, definition='local').J())",
     ],
   };
 }
